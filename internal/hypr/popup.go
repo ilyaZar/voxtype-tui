@@ -2,9 +2,11 @@ package hypr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,200 +14,176 @@ import (
 	"github.com/ilyaZar/voxtype-tui/internal/config"
 )
 
-type Monitor struct {
-	ID              int       `json:"id"`
-	X               int       `json:"x"`
-	Y               int       `json:"y"`
-	Width           int       `json:"width"`
-	Reserved        []int     `json:"reserved"`
-	Focused         bool      `json:"focused"`
-	ActiveWorkspace Workspace `json:"activeWorkspace"`
+const (
+	waitAttempts = 60
+	waitInterval = 50 * time.Millisecond
+)
+
+type workspace struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
-type Workspace struct {
-	ID int `json:"id"`
-}
-
-type Client struct {
+type client struct {
 	Address      string    `json:"address"`
-	At           []int     `json:"at"`
-	Size         []int     `json:"size"`
 	Class        string    `json:"class"`
 	InitialClass string    `json:"initialClass"`
 	Title        string    `json:"title"`
 	InitialTitle string    `json:"initialTitle"`
-	Workspace    Workspace `json:"workspace"`
+	Workspace    workspace `json:"workspace"`
 }
 
 func Popup(cfg config.AppConfig, configFile string) error {
-	if err := requireCommands("hyprctl", cfg.Popup.Terminal); err != nil {
+	popup := cfg.Popup
+	if err := validatePopupConfig(popup); err != nil {
+		return err
+	}
+	if err := requireCommands("hyprctl", popup.Terminal); err != nil {
 		return err
 	}
 
-	monitor, err := focusedMonitor()
+	workspace, err := activeWorkspace()
 	if err != nil {
 		return err
 	}
+	if client, ok, err := findClient(popup); err != nil {
+		return err
+	} else if ok {
+		if sameWorkspace(client.Workspace, workspace) {
+			return focusClient(client.Address)
+		}
+		if err := closeClient(client.Address); err != nil {
+			return err
+		}
+		if err := waitForNoClient(popup); err != nil {
+			return err
+		}
+	}
+
+	if err := launchPopup(popup, configFile); err != nil {
+		return err
+	}
+	client, err := waitForClient(popup)
+	if err != nil {
+		return err
+	}
+	return focusClient(client.Address)
+}
+
+func validatePopupConfig(cfg config.PopupConfig) error {
+	if filepath.Base(cfg.Terminal) != "ghostty" {
+		return fmt.Errorf("popup terminal must be ghostty; got %s", cfg.Terminal)
+	}
+	if cfg.Class == "" {
+		return fmt.Errorf("popup class is not configured")
+	}
+	if cfg.Title == "" {
+		return fmt.Errorf("popup title is not configured")
+	}
+	if cfg.TerminalColumns <= 0 || cfg.TerminalRows <= 0 {
+		return fmt.Errorf("popup terminal size must be positive")
+	}
+	return nil
+}
+
+func launchPopup(cfg config.PopupConfig, configFile string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
+	return dispatch("exec", popupCommand(cfg, exe, configFile))
+}
 
-	reservedTop := 0
-	if len(monitor.Reserved) > 1 {
-		reservedTop = monitor.Reserved[1]
-	}
-	localX := monitor.Width - cfg.Popup.Width - cfg.Popup.MarginX
-	if localX < 0 {
-		localX = cfg.Popup.MarginX
-	}
-	localY := reservedTop + cfg.Popup.MarginY
-	globalX := monitor.X + localX
-	globalY := monitor.Y + localY
-
-	_ = dispatch("closewindow", "class:"+cfg.Popup.Class)
-	_ = dispatch("closewindow", "title:"+cfg.Popup.Title)
-	if err := waitForNoClient(cfg); err != nil {
-		return err
-	}
-
-	rules := fmt.Sprintf(
-		"[monitor %d; workspace %s silent; float; no_anim; size %d %d; move %d %d; tag -default-opacity; opacity %s]",
-		monitor.ID,
-		cfg.Popup.StageWorkspace,
-		cfg.Popup.Width,
-		cfg.Popup.Height,
-		localX,
-		localY,
-		cfg.Popup.Opacity,
-	)
-	command := shellJoin([]string{
-		cfg.Popup.Terminal,
+func popupCommand(cfg config.PopupConfig, exe string, configFile string) string {
+	return shellJoin([]string{
+		cfg.Terminal,
 		"--gtk-single-instance=false",
-		"--class=" + cfg.Popup.Class,
-		"--title=" + cfg.Popup.Title,
+		"--class=" + cfg.Class,
+		"--title=" + cfg.Title,
 		"--working-directory=" + homeDir(),
 		"--window-decoration=none",
 		"--gtk-titlebar=false",
-		"--window-padding-x=" + strconv.Itoa(cfg.Popup.TerminalPaddingX),
-		"--window-padding-y=" + strconv.Itoa(cfg.Popup.TerminalPaddingY),
-		"--window-width=" + strconv.Itoa(cfg.Popup.TerminalColumns),
-		"--window-height=" + strconv.Itoa(cfg.Popup.TerminalRows),
+		"--window-padding-x=" + strconv.Itoa(cfg.TerminalPaddingX),
+		"--window-padding-y=" + strconv.Itoa(cfg.TerminalPaddingY),
+		"--window-width=" + strconv.Itoa(cfg.TerminalColumns),
+		"--window-height=" + strconv.Itoa(cfg.TerminalRows),
 		"-e",
 		exe,
 		"choose",
 		"--config-file",
 		configFile,
-		"--window-x",
-		strconv.Itoa(globalX),
-		"--window-y",
-		strconv.Itoa(globalY),
 	})
+}
 
-	if err := dispatch("exec", rules+" "+command); err != nil {
-		return err
-	}
-
-	client, err := waitForClient(cfg)
+func activeWorkspace() (workspace, error) {
+	data, err := hyprJSON("activeworkspace")
 	if err != nil {
-		return err
+		return workspace{}, err
 	}
-	if err := placeStagedClient(cfg, client.Address, globalX, globalY); err != nil {
-		return err
+	var current workspace
+	if err := json.Unmarshal(data, &current); err != nil {
+		return workspace{}, fmt.Errorf("parse active workspace: %w", err)
 	}
-	_ = dispatch("pin", "address:"+client.Address)
-	if err := placeStagedClient(cfg, client.Address, globalX, globalY); err != nil {
-		return err
-	}
-	_ = dispatch("focuswindow", "address:"+client.Address)
-	return nil
+	return current, nil
 }
 
-func focusedMonitor() (Monitor, error) {
-	data, err := hyprJSON("monitors")
-	if err != nil {
-		return Monitor{}, err
-	}
-	var monitors []Monitor
-	if err := json.Unmarshal(data, &monitors); err != nil {
-		return Monitor{}, fmt.Errorf("parse monitors: %w", err)
-	}
-	for _, monitor := range monitors {
-		if monitor.Focused {
-			return monitor, nil
-		}
-	}
-	return Monitor{}, fmt.Errorf("focused Hypr monitor not found")
+func waitForClient(cfg config.PopupConfig) (client, error) {
+	return waitForClientState(cfg, true, "language selector window did not appear")
 }
 
-func waitForClient(cfg config.AppConfig) (Client, error) {
-	for attempt := 0; attempt < cfg.Popup.WaitAttempts; attempt++ {
-		client, ok, err := findClient(cfg)
+func waitForNoClient(cfg config.PopupConfig) error {
+	_, err := waitForClientState(cfg, false, "previous language selector window did not close")
+	return err
+}
+
+func waitForClientState(cfg config.PopupConfig, wantFound bool, timeout string) (client, error) {
+	for attempt := 0; attempt < waitAttempts; attempt++ {
+		found, ok, err := findClient(cfg)
 		if err != nil {
-			return Client{}, err
+			return client{}, err
 		}
-		if ok {
-			return client, nil
+		if ok == wantFound {
+			return found, nil
 		}
-		time.Sleep(time.Duration(cfg.Popup.WaitIntervalMS) * time.Millisecond)
+		time.Sleep(waitInterval)
 	}
-	return Client{}, fmt.Errorf("language selector window did not appear")
+	return client{}, errors.New(timeout)
 }
 
-func waitForNoClient(cfg config.AppConfig) error {
-	for attempt := 0; attempt < cfg.Popup.WaitAttempts; attempt++ {
-		_, ok, err := findClient(cfg)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		time.Sleep(time.Duration(cfg.Popup.WaitIntervalMS) * time.Millisecond)
-	}
-	return fmt.Errorf("previous language selector window did not close")
-}
-
-func findClient(cfg config.AppConfig) (Client, bool, error) {
+func findClient(cfg config.PopupConfig) (client, bool, error) {
 	data, err := hyprJSON("clients")
 	if err != nil {
-		return Client{}, false, err
+		return client{}, false, err
 	}
-	var clients []Client
+	var clients []client
 	if err := json.Unmarshal(data, &clients); err != nil {
-		return Client{}, false, fmt.Errorf("parse clients: %w", err)
+		return client{}, false, fmt.Errorf("parse clients: %w", err)
 	}
 	for _, client := range clients {
-		if client.Class == cfg.Popup.Class || client.InitialClass == cfg.Popup.Class || client.Title == cfg.Popup.Title || client.InitialTitle == cfg.Popup.Title {
+		if matchesClient(client, cfg) {
 			return client, true, nil
 		}
 	}
-	return Client{}, false, nil
+	return client{}, false, nil
 }
 
-func placeStagedClient(cfg config.AppConfig, address string, targetX int, targetY int) error {
-	_ = dispatch("setprop", fmt.Sprintf("address:%s min_size %d %d", address, cfg.Popup.MinWidth, cfg.Popup.MinHeight))
-	_ = dispatch("resizewindowpixel", fmt.Sprintf("exact %d %d,address:%s", cfg.Popup.Width, cfg.Popup.Height, address))
+func matchesClient(client client, cfg config.PopupConfig) bool {
+	return client.Class == cfg.Class || client.InitialClass == cfg.Class || client.Title == cfg.Title || client.InitialTitle == cfg.Title
+}
 
-	placed := false
-	for attempt := 0; attempt < cfg.Popup.PositionAttempts; attempt++ {
-		time.Sleep(time.Duration(cfg.Popup.PositionSettleWaitMS) * time.Millisecond)
-		client, ok, err := findClient(cfg)
-		if err != nil {
-			return err
-		}
-		if !ok || len(client.At) < 2 {
-			continue
-		}
-		dx := targetX - client.At[0]
-		dy := targetY - client.At[1]
-		_ = dispatch("movewindowpixel", fmt.Sprintf("%d %d,address:%s", dx, dy, address))
-		placed = true
+func sameWorkspace(a workspace, b workspace) bool {
+	if a.Name != "" && b.Name != "" {
+		return a.Name == b.Name
 	}
-	if !placed {
-		return fmt.Errorf("language selector geometry unavailable")
-	}
-	return nil
+	return a.ID == b.ID
+}
+
+func focusClient(address string) error {
+	return dispatch("focuswindow", "address:"+address)
+}
+
+func closeClient(address string) error {
+	return dispatch("closewindow", "address:"+address)
 }
 
 func hyprJSON(kind string) ([]byte, error) {
