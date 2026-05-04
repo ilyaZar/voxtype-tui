@@ -1,13 +1,16 @@
 BINARY := voxtype-tui
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf dev)
+LDFLAGS ?= -X main.version=$(VERSION)
 
 .PHONY: all build install test fmt tidy clean
 
 all: build
 
 build:
-	go build -o bin/$(BINARY) ./cmd/voxtype-tui
+	mkdir -p bin
+	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/voxtype-tui
 
 install: build
 	mkdir -p $(BINDIR)

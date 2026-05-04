@@ -33,16 +33,24 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$BINDIR"
+go_version="$(go env GOVERSION)"
+if [[ "$go_version" =~ ^go([0-9]+)\.([0-9]+) ]] && \
+  ((BASH_REMATCH[1] < 1 || (BASH_REMATCH[1] == 1 && BASH_REMATCH[2] < 23))); then
+  err "Go 1.23 or newer is required (found $go_version)"
+  exit 1
+fi
 
-info "Tidying Go module"
-go -C "$SCRIPT_DIR" mod tidy
+mkdir -p "$BINDIR"
 
 info "Running Go tests"
 go -C "$SCRIPT_DIR" test ./...
 
 info "Building voxtype-tui"
-go -C "$SCRIPT_DIR" build -o "$BINDIR/voxtype-tui" ./cmd/voxtype-tui
+version="$(git -C "$SCRIPT_DIR" describe --tags --always --dirty 2>/dev/null || printf 'dev')"
+go -C "$SCRIPT_DIR" build \
+  -ldflags "-X main.version=$version" \
+  -o "$BINDIR/voxtype-tui" \
+  ./cmd/voxtype-tui
 chmod +x "$BINDIR/voxtype-tui"
 
 ok "voxtype-tui installed"
