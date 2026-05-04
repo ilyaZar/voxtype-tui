@@ -34,7 +34,7 @@ make install
 Install from GitHub:
 
 ```bash
-GOBIN="$HOME/.local/bin" go install github.com/ilyaZar/voxtype-tui@latest
+GOBIN="$HOME/.local/bin" go install github.com/ilyaZar/voxtype-tui/cmd/voxtype-tui@latest
 ```
 
 ## Runtime Contract
