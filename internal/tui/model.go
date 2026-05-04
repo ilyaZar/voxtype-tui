@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -18,15 +19,16 @@ type Model struct {
 	done      bool
 	cancelled bool
 	message   string
+	height    int
 }
 
-func New(selected []string, colors theme.Colors) Model {
+func New(selected []string, colors theme.Colors, languages ...[]voxtype.Language) Model {
 	selectedMap := make(map[string]bool, len(selected))
 	for _, code := range selected {
 		selectedMap[code] = true
 	}
 	return Model{
-		languages: voxtype.Languages,
+		languages: languageList(languages...),
 		selected:  selectedMap,
 		colors:    colors,
 	}
@@ -38,6 +40,8 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc", "q":
@@ -71,12 +75,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.Accent))
-	itemStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.Foreground))
+	background := lipgloss.Color(m.colors.Background)
+	baseStyle := lipgloss.NewStyle().Background(background)
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.colors.Yellow)).
+		Background(background).
+		Bold(true).
+		Underline(true)
+	itemStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.Foreground)).Background(background)
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.SelectionForeground)).Background(lipgloss.Color(m.colors.SelectionBackground))
-	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.Yellow))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.colors.Red)).Background(background)
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Background(background)
+	footer := mutedStyle.Render("x toggle  up/down navigate  enter submit  ctrl+a select all")
+	contentLines := 1 + len(m.languages)
+	if m.message != "" {
+		contentLines++
+	}
 
+	menus := languageMenus(m.languages)
 	var out strings.Builder
 	out.WriteString(headerStyle.Render("Voxtype languages:"))
 	out.WriteString("\n")
@@ -89,7 +105,7 @@ func (m Model) View() string {
 		if m.selected[language.Code] {
 			prefix = "[x] "
 		}
-		line := fmt.Sprintf("%s%s%s", cursor, prefix, language.Menu)
+		line := fmt.Sprintf("%s%s%s", cursor, prefix, menus[index])
 		if m.selected[language.Code] {
 			line = selectedStyle.Render(line)
 		} else {
@@ -99,12 +115,69 @@ func (m Model) View() string {
 		out.WriteString("\n")
 	}
 	if m.message != "" {
-		out.WriteString(warnStyle.Render(m.message))
+		out.WriteString(errorStyle.Render(m.message))
 		out.WriteString("\n")
 	}
-	out.WriteString("\n")
-	out.WriteString(mutedStyle.Render("x toggle  up/down navigate  enter submit  ctrl+a select all"))
-	return out.String()
+	for range footerBlankLines(m.height, contentLines) {
+		out.WriteString("\n")
+	}
+	out.WriteString(footer)
+	return baseStyle.Render(out.String())
+}
+
+func languageMenus(languages []voxtype.Language) []string {
+	width := 0
+	for _, language := range languages {
+		width = max(width, utf8.RuneCountInString(languageName(language)))
+	}
+
+	menus := make([]string, 0, len(languages))
+	for _, language := range languages {
+		name := languageName(language)
+		padding := strings.Repeat(" ", width-utf8.RuneCountInString(name))
+		menus = append(menus, fmt.Sprintf("%s%s (%s)", name, padding, languageShortcut(language)))
+	}
+	return menus
+}
+
+func languageName(language voxtype.Language) string {
+	if language.Name != "" {
+		return language.Name
+	}
+	return strings.ToUpper(language.Code)
+}
+
+func languageShortcut(language voxtype.Language) string {
+	shortcut := strings.ToUpper(language.Code)
+	if len([]rune(shortcut)) != 2 {
+		shortcut = strings.ToUpper(language.Label)
+	}
+	runes := []rune(shortcut)
+	if len(runes) > 2 {
+		return string(runes[:2])
+	}
+	for len(runes) < 2 {
+		runes = append(runes, ' ')
+	}
+	return string(runes)
+}
+
+func languageList(languages ...[]voxtype.Language) []voxtype.Language {
+	if len(languages) > 0 && len(languages[0]) > 0 {
+		return languages[0]
+	}
+	return nil
+}
+
+func footerBlankLines(height int, contentLines int) int {
+	if height <= 0 {
+		return 1
+	}
+	blankLines := height - contentLines - 1
+	if blankLines < 1 {
+		return 1
+	}
+	return blankLines
 }
 
 func (m Model) Done() bool {
@@ -126,6 +199,9 @@ func (m Model) SelectedCodes() []string {
 }
 
 func (m *Model) toggleCurrent() {
+	if len(m.languages) == 0 {
+		return
+	}
 	code := m.languages[m.cursor].Code
 	m.selected[code] = !m.selected[code]
 	m.message = ""
