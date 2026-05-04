@@ -65,6 +65,9 @@ func Popup(cfg config.AppConfig, configFile string) error {
 
 	_ = dispatch("closewindow", "class:"+cfg.Popup.Class)
 	_ = dispatch("closewindow", "title:"+cfg.Popup.Title)
+	if err := waitForNoClient(cfg); err != nil {
+		return err
+	}
 
 	rules := fmt.Sprintf(
 		"[monitor %d; workspace %s silent; float; no_anim; size %d %d; move %d %d; tag -default-opacity; opacity %s]",
@@ -110,11 +113,10 @@ func Popup(cfg config.AppConfig, configFile string) error {
 	if err := placeStagedClient(cfg, client.Address, globalX, globalY); err != nil {
 		return err
 	}
-	if err := dispatch("movetoworkspacesilent", fmt.Sprintf("%d,address:%s", monitor.ActiveWorkspace.ID, client.Address)); err != nil {
+	_ = dispatch("pin", "address:"+client.Address)
+	if err := placeStagedClient(cfg, client.Address, globalX, globalY); err != nil {
 		return err
 	}
-	time.Sleep(time.Duration(cfg.Popup.PositionSettleWaitMS) * time.Millisecond)
-	_ = dispatch("pin", "address:"+client.Address)
 	_ = dispatch("focuswindow", "address:"+client.Address)
 	return nil
 }
@@ -150,6 +152,20 @@ func waitForClient(cfg config.AppConfig) (Client, error) {
 	return Client{}, fmt.Errorf("language selector window did not appear")
 }
 
+func waitForNoClient(cfg config.AppConfig) error {
+	for attempt := 0; attempt < cfg.Popup.WaitAttempts; attempt++ {
+		_, ok, err := findClient(cfg)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		time.Sleep(time.Duration(cfg.Popup.WaitIntervalMS) * time.Millisecond)
+	}
+	return fmt.Errorf("previous language selector window did not close")
+}
+
 func findClient(cfg config.AppConfig) (Client, bool, error) {
 	data, err := hyprJSON("clients")
 	if err != nil {
@@ -171,6 +187,7 @@ func placeStagedClient(cfg config.AppConfig, address string, targetX int, target
 	_ = dispatch("setprop", fmt.Sprintf("address:%s min_size %d %d", address, cfg.Popup.MinWidth, cfg.Popup.MinHeight))
 	_ = dispatch("resizewindowpixel", fmt.Sprintf("exact %d %d,address:%s", cfg.Popup.Width, cfg.Popup.Height, address))
 
+	placed := false
 	for attempt := 0; attempt < cfg.Popup.PositionAttempts; attempt++ {
 		time.Sleep(time.Duration(cfg.Popup.PositionSettleWaitMS) * time.Millisecond)
 		client, ok, err := findClient(cfg)
@@ -178,11 +195,15 @@ func placeStagedClient(cfg config.AppConfig, address string, targetX int, target
 			return err
 		}
 		if !ok || len(client.At) < 2 {
-			return fmt.Errorf("language selector geometry unavailable")
+			continue
 		}
 		dx := targetX - client.At[0]
 		dy := targetY - client.At[1]
 		_ = dispatch("movewindowpixel", fmt.Sprintf("%d %d,address:%s", dx, dy, address))
+		placed = true
+	}
+	if !placed {
+		return fmt.Errorf("language selector geometry unavailable")
 	}
 	return nil
 }
