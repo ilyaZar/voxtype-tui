@@ -34,30 +34,13 @@ type ThemeConfig struct {
 }
 
 type PopupConfig struct {
-	Terminal             string `toml:"terminal"`
-	Class                string `toml:"class"`
-	Title                string `toml:"title"`
-	StageWorkspace       string `toml:"stage_workspace"`
-	Width                int    `toml:"width"`
-	Height               int    `toml:"height"`
-	MinWidth             int    `toml:"min_width"`
-	MinHeight            int    `toml:"min_height"`
-	MarginX              int    `toml:"margin_x"`
-	MarginY              int    `toml:"margin_y"`
-	TerminalPaddingX     int    `toml:"terminal_padding_x"`
-	TerminalPaddingY     int    `toml:"terminal_padding_y"`
-	TerminalColumns      int    `toml:"terminal_columns"`
-	TerminalRows         int    `toml:"terminal_rows"`
-	WaitAttempts         int    `toml:"wait_attempts"`
-	WaitIntervalMS       int    `toml:"wait_interval_ms"`
-	PositionAttempts     int    `toml:"position_attempts"`
-	PositionSettleWaitMS int    `toml:"position_settle_wait_ms"`
-	Opacity              string `toml:"opacity"`
-}
-
-func DefaultPaths() Paths {
-	appConfig := DefaultAppConfig()
-	return appConfig.Paths()
+	Terminal         string `toml:"terminal"`
+	Class            string `toml:"class"`
+	Title            string `toml:"title"`
+	TerminalPaddingX int    `toml:"terminal_padding_x"`
+	TerminalPaddingY int    `toml:"terminal_padding_y"`
+	TerminalColumns  int    `toml:"terminal_columns"`
+	TerminalRows     int    `toml:"terminal_rows"`
 }
 
 func DefaultConfigFile() string {
@@ -85,25 +68,13 @@ func DefaultAppConfig() AppConfig {
 			Colors: filepath.Join(home, ".config/omarchy/current/theme/colors.toml"),
 		},
 		Popup: PopupConfig{
-			Terminal:             "ghostty",
-			Class:                "org.omarchy.voxtype.lang-menu",
-			Title:                "omarchy-voxtype-language-menu",
-			StageWorkspace:       "special:voxtype-tui",
-			Width:                500,
-			Height:               126,
-			MinWidth:             1,
-			MinHeight:            1,
-			MarginX:              8,
-			MarginY:              8,
-			TerminalPaddingX:     6,
-			TerminalPaddingY:     6,
-			TerminalColumns:      46,
-			TerminalRows:         7,
-			WaitAttempts:         100,
-			WaitIntervalMS:       50,
-			PositionAttempts:     3,
-			PositionSettleWaitMS: 80,
-			Opacity:              "0.97 0.94",
+			Terminal:         "ghostty",
+			Class:            "org.omarchy.voxtype.lang-menu",
+			Title:            "omarchy-voxtype-language-menu",
+			TerminalPaddingX: 6,
+			TerminalPaddingY: 6,
+			TerminalColumns:  46,
+			TerminalRows:     7,
 		},
 	}
 }
