@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 
 	"github.com/ilyaZar/voxtype-tui/internal/config"
 	"github.com/ilyaZar/voxtype-tui/internal/notify"
@@ -13,15 +14,20 @@ import (
 type Result struct {
 	Current        voxtype.Language
 	Cycle          []string
+	Languages      []voxtype.Language
 	ChangedCurrent bool
 }
 
 func Toggle(paths config.Paths) (Result, error) {
-	cycle, err := config.ReadCycle(paths.CycleFile)
+	languages, err := config.ReadLanguages(paths.ConfigFile)
 	if err != nil {
 		return Result{}, err
 	}
-	current, ok, err := config.CurrentPreset(paths.ConfigFile)
+	cycle, err := config.ReadCycle(paths.CycleFile, languages)
+	if err != nil {
+		return Result{}, err
+	}
+	current, ok, err := config.CurrentPreset(paths.ConfigFile, languages)
 	if err != nil {
 		return Result{}, err
 	}
@@ -35,78 +41,90 @@ func Toggle(paths config.Paths) (Result, error) {
 			}
 		}
 	}
-	target, _ := voxtype.ByCode(targetCode)
-	if err := CheckModels(paths.BaseModel, []voxtype.Language{target}); err != nil {
+	target, _ := voxtype.ByCode(targetCode, languages)
+	if err := checkModels(paths.BaseModel, []voxtype.Language{target}); err != nil {
 		return Result{}, err
 	}
 	if err := config.WritePreset(paths.ConfigFile, target); err != nil {
 		return Result{}, err
 	}
-	if err := Restart(); err != nil {
+	if err := restart(); err != nil {
 		return Result{}, err
 	}
 
-	message := fmt.Sprintf(
-		"Switched to %s (cycle: %s; model: %s, lang: %s)",
-		target.Label,
-		voxtype.Labels(cycle),
-		target.Model,
-		target.Language,
-	)
-	notify.Send("normal", "5000", "Voxtype language preset", message)
-	return Result{Current: target, Cycle: cycle}, nil
+	result := Result{Current: target, Cycle: cycle, Languages: languages}
+	notify.Send("normal", "5000", "Voxtype language preset", ToggleMessage(result))
+	return result, nil
 }
 
 func Apply(paths config.Paths, selected []string) (Result, error) {
-	selected = voxtype.KnownCodes(selected)
+	languages, err := config.ReadLanguages(paths.ConfigFile)
+	if err != nil {
+		return Result{}, err
+	}
+	selected = voxtype.KnownCodes(selected, languages)
 	if len(selected) == 0 {
 		return Result{}, fmt.Errorf("select at least one language")
 	}
 
-	targets := make([]voxtype.Language, 0, len(selected))
-	for _, code := range selected {
-		language, _ := voxtype.ByCode(code)
-		targets = append(targets, language)
-	}
-	if err := CheckModels(paths.BaseModel, targets); err != nil {
+	targets := languagesForCodes(languages, selected)
+	if err := checkModels(paths.BaseModel, targets); err != nil {
 		return Result{}, err
 	}
 
-	current, ok, err := config.CurrentPreset(paths.ConfigFile)
+	current, ok, err := config.CurrentPreset(paths.ConfigFile, languages)
 	if err != nil {
 		return Result{}, err
 	}
 	changedCurrent := false
-	if !ok || !contains(selected, current.Code) {
+	if !ok || !slices.Contains(selected, current.Code) {
 		current = targets[0]
-		if err := config.WritePreset(paths.ConfigFile, current); err != nil {
-			return Result{}, err
-		}
 		changedCurrent = true
 	}
 
 	if err := config.WriteCycle(paths.CycleFile, selected); err != nil {
 		return Result{}, err
 	}
-	if err := Restart(); err != nil {
+	if changedCurrent {
+		if err := config.WritePreset(paths.ConfigFile, current); err != nil {
+			return Result{}, err
+		}
+	}
+	if err := restart(); err != nil {
 		return Result{}, err
 	}
 
-	detail := fmt.Sprintf(
-		"Enabled: %s. Current stays %s (model: %s, lang: %s).",
-		voxtype.Labels(selected), current.Label, current.Model, current.Language,
-	)
-	if changedCurrent {
-		detail = fmt.Sprintf(
-			"Enabled: %s. Current reset to %s (model: %s, lang: %s).",
-			voxtype.Labels(selected), current.Label, current.Model, current.Language,
-		)
-	}
-	notify.Send("normal", "5000", "Voxtype language cycle", detail)
-	return Result{Current: current, Cycle: selected, ChangedCurrent: changedCurrent}, nil
+	result := Result{Current: current, Cycle: selected, Languages: languages, ChangedCurrent: changedCurrent}
+	notify.Send("normal", "5000", "Voxtype language cycle", ApplyMessage(result))
+	return result, nil
 }
 
-func CheckModels(basePath string, targets []voxtype.Language) error {
+func ToggleMessage(result Result) string {
+	return fmt.Sprintf(
+		"Switched to %s (cycle: %s; model: %s, lang: %s)",
+		result.Current.Label,
+		voxtype.Labels(result.Cycle, result.Languages),
+		result.Current.Model,
+		result.Current.Language,
+	)
+}
+
+func ApplyMessage(result Result) string {
+	status := "stays"
+	if result.ChangedCurrent {
+		status = "reset to"
+	}
+	return fmt.Sprintf(
+		"Enabled: %s. Current %s %s (model: %s, lang: %s).",
+		voxtype.Labels(result.Cycle, result.Languages),
+		status,
+		result.Current.Label,
+		result.Current.Model,
+		result.Current.Language,
+	)
+}
+
+func checkModels(basePath string, targets []voxtype.Language) error {
 	needsBase := false
 	for _, target := range targets {
 		if target.Model == "base" {
@@ -118,12 +136,12 @@ func CheckModels(basePath string, targets []voxtype.Language) error {
 		return nil
 	}
 	if _, err := os.Stat(basePath); err != nil {
-		return fmt.Errorf("DE/RU requires base model, but model file is missing: %s", basePath)
+		return fmt.Errorf("non-English presets require base model, but model file is missing: %s", basePath)
 	}
 	return nil
 }
 
-func Restart() error {
+func restart() error {
 	if os.Getenv("VOXTYPE_SKIP_RESTART") == "1" {
 		return nil
 	}
@@ -135,6 +153,15 @@ func Restart() error {
 		return fmt.Errorf("voxtype restart failed: %w", err)
 	}
 	return nil
+}
+
+func languagesForCodes(known []voxtype.Language, codes []string) []voxtype.Language {
+	languages := make([]voxtype.Language, 0, len(codes))
+	for _, code := range codes {
+		language, _ := voxtype.ByCode(code, known)
+		languages = append(languages, language)
+	}
+	return languages
 }
 
 func Record(cfg config.AppConfig, action string) error {
@@ -153,13 +180,4 @@ func Record(cfg config.AppConfig, action string) error {
 		return fmt.Errorf("voxtype record %s failed: %w", action, err)
 	}
 	return nil
-}
-
-func contains(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
-		}
-	}
-	return false
 }

@@ -1,29 +1,26 @@
 package voxtype
 
+import "strings"
+
 type Language struct {
-	Code     string
-	Label    string
-	Menu     string
-	Model    string
-	Language string
+	Code     string `toml:"code"`
+	Name     string `toml:"name"`
+	Label    string `toml:"label"`
+	Model    string `toml:"model"`
+	Language string `toml:"language"`
 }
 
-var Languages = []Language{
-	{Code: "en", Label: "EN", Menu: "English (EN)", Model: "base.en", Language: "en"},
-	{Code: "de", Label: "DE", Menu: "German (DE)", Model: "base", Language: "de"},
-	{Code: "ru", Label: "RU", Menu: "Russian (RU)", Model: "base", Language: "ru"},
-}
-
-func AllCodes() []string {
-	codes := make([]string, 0, len(Languages))
-	for _, language := range Languages {
+func AllCodes(languages ...[]Language) []string {
+	list := languageList(languages...)
+	codes := make([]string, 0, len(list))
+	for _, language := range list {
 		codes = append(codes, language.Code)
 	}
 	return codes
 }
 
-func ByCode(code string) (Language, bool) {
-	for _, language := range Languages {
+func ByCode(code string, languages ...[]Language) (Language, bool) {
+	for _, language := range languageList(languages...) {
 		if language.Code == code {
 			return language, true
 		}
@@ -31,32 +28,36 @@ func ByCode(code string) (Language, bool) {
 	return Language{}, false
 }
 
-func KnownCodes(codes []string) []string {
-	requested := make(map[string]bool, len(codes))
-	for _, code := range codes {
-		requested[code] = true
-	}
-
+func KnownCodes(codes []string, languages ...[]Language) []string {
+	seen := make(map[string]bool, len(codes))
 	known := make([]string, 0, len(codes))
-	for _, language := range Languages {
-		if requested[language.Code] {
-			known = append(known, language.Code)
+	for _, code := range codes {
+		if seen[code] {
+			continue
+		}
+		if _, ok := ByCode(code, languages...); ok {
+			known = append(known, code)
+			seen[code] = true
 		}
 	}
 	return known
 }
 
-func Labels(codes []string) string {
-	labels := ""
-	for index, code := range codes {
-		language, ok := ByCode(code)
+func Labels(codes []string, languages ...[]Language) string {
+	labels := make([]string, 0, len(codes))
+	for _, code := range codes {
+		language, ok := ByCode(code, languages...)
 		if !ok {
 			continue
 		}
-		if index > 0 && labels != "" {
-			labels += ", "
-		}
-		labels += language.Label
+		labels = append(labels, language.Label)
 	}
-	return labels
+	return strings.Join(labels, ", ")
+}
+
+func languageList(languages ...[]Language) []Language {
+	if len(languages) > 0 && len(languages[0]) > 0 {
+		return languages[0]
+	}
+	return nil
 }

@@ -15,15 +15,16 @@ voxtype-tui selected
 
 - `record toggle` proxies `voxtype record toggle`.
 - `language toggle` switches to the next selected preset.
-- `popup` opens the placed language selector terminal.
+- `popup` opens or focuses the centered language selector terminal.
 - `choose` opens a multi-select TUI and applies the selected language cycle.
 - `toggle` is a compatibility alias for `language toggle`.
 - `selected` prints enabled language codes, one per line.
 
 ## Build
 
+Requires Go 1.23 or newer.
+
 ```bash
-make tidy
 make test
 make build
 make install
@@ -40,14 +41,21 @@ GOBIN="$HOME/.local/bin" go install github.com/ilyaZar/voxtype-tui/cmd/voxtype-t
 ## Runtime Contract
 
 - The binary owns Voxtype config edits, language-cycle state, model checks,
-  record commands, popup placement, service restarts, and notifications.
-- `popup` owns monitor geometry and Ghostty placement. It stages the terminal on
-  a hidden special workspace before reveal to avoid visible warping.
+  record commands, popup launch/focus behavior, service restarts, and
+  notifications.
+- Runtime integration expects `voxtype`, `systemctl --user`, `hyprctl`, and
+  Ghostty. `notify-send` is used when available.
+- Hypr window rules own popup size and centering. If the selector is already on
+  the current workspace, Shift+F12 focuses it; stale selectors on other
+  workspaces are closed and relaunched.
 - The default config path is `~/.config/voxtype-tui/config.toml`.
 - The default integration paths match the repo-managed Omarchy overlay:
   - `~/.config/voxtype/config.toml`
   - `~/.config/voxtype/language_cycle.toml`
   - `~/.config/omarchy/current/theme/colors.toml`
+- Language presets are discovered from `[[voxtype_tui.language]]` entries in
+  the Voxtype config. If no presets are configured, commands fail with
+  `No configured languages in ...`.
 
 ## Environment Overrides
 
@@ -57,7 +65,7 @@ GOBIN="$HOME/.local/bin" go install github.com/ilyaZar/voxtype-tui/cmd/voxtype-t
 | `VOXTYPE_CONFIG`        | Voxtype `config.toml` path      |
 | `VOXTYPE_CYCLE`         | language cycle TOML path        |
 | `VOXTYPE_THEME_COLORS`  | Omarchy colors TOML path        |
-| `VOXTYPE_BASE_MODEL`    | base model path for DE/RU       |
+| `VOXTYPE_BASE_MODEL`    | base model path for non-English |
 | `VOXTYPE_SKIP_RESTART`  | skip `systemctl --user restart` |
 
 ## Keys

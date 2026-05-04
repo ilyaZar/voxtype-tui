@@ -14,7 +14,6 @@ import (
 	"github.com/ilyaZar/voxtype-tui/internal/notify"
 	"github.com/ilyaZar/voxtype-tui/internal/theme"
 	"github.com/ilyaZar/voxtype-tui/internal/tui"
-	"github.com/ilyaZar/voxtype-tui/internal/voxtype"
 )
 
 const usage = `usage: voxtype-tui <command> [options]
@@ -31,9 +30,14 @@ commands:
 
 var version = "dev"
 
+const (
+	ansiRed   = "\x1b[31m"
+	ansiReset = "\x1b[0m"
+)
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		fmt.Fprintf(os.Stderr, "%sError: %v%s\n", ansiRed, err, ansiReset)
 		notify.Send("critical", "5000", "Voxtype language preset", err.Error())
 		os.Exit(1)
 	}
@@ -59,6 +63,9 @@ func run(args []string) error {
 	case "selected":
 		return runSelected(args[1:])
 	case "version":
+		if len(args) > 1 {
+			return fmt.Errorf("unexpected version argument: %s", args[1])
+		}
 		fmt.Println(version)
 		return nil
 	case "help", "-h", "--help":
@@ -70,13 +77,7 @@ func run(args []string) error {
 }
 
 func runToggle(args []string) error {
-	fs := flag.NewFlagSet("toggle", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	appConfig, _ := addConfigFlag(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := config.LoadAppConfig(*appConfig)
+	cfg, _, err := loadConfig("toggle", args)
 	if err != nil {
 		return err
 	}
@@ -85,28 +86,22 @@ func runToggle(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Switched to %s (cycle: %s; model: %s, lang: %s)\n",
-		result.Current.Label,
-		voxtype.Labels(result.Cycle),
-		result.Current.Model,
-		result.Current.Language,
-	)
+	fmt.Println(app.ToggleMessage(result))
 	return nil
 }
 
 func runSelected(args []string) error {
-	fs := flag.NewFlagSet("selected", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	appConfig, _ := addConfigFlag(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := config.LoadAppConfig(*appConfig)
+	cfg, _, err := loadConfig("selected", args)
 	if err != nil {
 		return err
 	}
 
-	codes, err := config.ReadCycle(cfg.Paths().CycleFile)
+	paths := cfg.Paths()
+	languages, err := config.ReadLanguages(paths.ConfigFile)
+	if err != nil {
+		return err
+	}
+	codes, err := config.ReadCycle(paths.CycleFile, languages)
 	if err != nil {
 		return err
 	}
@@ -115,27 +110,21 @@ func runSelected(args []string) error {
 }
 
 func runChoose(args []string) error {
-	fs := flag.NewFlagSet("choose", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	appConfig, _ := addConfigFlag(fs)
-	windowX := fs.Int("window-x", 0, "popup x coordinate supplied by wrapper")
-	windowY := fs.Int("window-y", 0, "popup y coordinate supplied by wrapper")
-	_ = windowX
-	_ = windowY
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := config.LoadAppConfig(*appConfig)
+	cfg, _, err := loadConfig("choose", args)
 	if err != nil {
 		return err
 	}
 	paths := cfg.Paths()
 
-	selected, err := config.ReadCycle(paths.CycleFile)
+	languages, err := config.ReadLanguages(paths.ConfigFile)
 	if err != nil {
 		return err
 	}
-	model := tui.New(selected, theme.Load(paths.ThemeFile))
+	selected, err := config.ReadCycle(paths.CycleFile, languages)
+	if err != nil {
+		return err
+	}
+	model := tui.New(selected, theme.Load(paths.ThemeFile), languages)
 	program := tea.NewProgram(model)
 	final, err := program.Run()
 	if err != nil {
@@ -153,17 +142,7 @@ func runChoose(args []string) error {
 	if err != nil {
 		return err
 	}
-	detail := fmt.Sprintf(
-		"Enabled: %s. Current stays %s (model: %s, lang: %s).",
-		voxtype.Labels(result.Cycle), result.Current.Label, result.Current.Model, result.Current.Language,
-	)
-	if result.ChangedCurrent {
-		detail = fmt.Sprintf(
-			"Enabled: %s. Current reset to %s (model: %s, lang: %s).",
-			voxtype.Labels(result.Cycle), result.Current.Label, result.Current.Model, result.Current.Language,
-		)
-	}
-	fmt.Println(detail)
+	fmt.Println(app.ApplyMessage(result))
 	return nil
 }
 
@@ -187,42 +166,88 @@ func runRecord(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: voxtype-tui record [toggle|start|stop]")
 	}
-	fs := flag.NewFlagSet("record", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	appConfig, _ := addConfigFlag(fs)
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
+	var (
+		action string
+		cfg    config.AppConfig
+		err    error
+	)
+	if isRecordAction(args[0]) {
+		action = args[0]
+		cfg, _, err = loadConfig("record", args[1:])
+	} else {
+		var appConfig string
+		var fs *flag.FlagSet
+		appConfig, fs, err = parseConfig("record", args)
+		if err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return fmt.Errorf("usage: voxtype-tui record [toggle|start|stop]")
+		}
+		action = fs.Arg(0)
+		cfg, err = config.LoadAppConfig(appConfig)
 	}
-	cfg, err := config.LoadAppConfig(*appConfig)
 	if err != nil {
 		return err
 	}
-	return app.Record(cfg, args[0])
+	return app.Record(cfg, action)
 }
 
 func runPopup(args []string) error {
-	fs := flag.NewFlagSet("popup", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	appConfig, defaultConfig := addConfigFlag(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := config.LoadAppConfig(*appConfig)
+	cfg, configPath, err := loadConfig("popup", args)
 	if err != nil {
 		return err
-	}
-	configPath := *appConfig
-	if configPath == "" {
-		configPath = os.Getenv("VOXTYPE_TUI_CONFIG")
-	}
-	if configPath == "" {
-		configPath = defaultConfig
 	}
 	return hypr.Popup(cfg, configPath)
 }
 
-func addConfigFlag(fs *flag.FlagSet) (*string, string) {
-	defaultConfig := config.DefaultConfigFile()
-	path := fs.String("config-file", "", "voxtype-tui config.toml path")
-	return path, defaultConfig
+func loadConfig(name string, args []string) (config.AppConfig, string, error) {
+	appConfig, fs, err := parseConfig(name, args)
+	if err != nil {
+		return config.AppConfig{}, "", err
+	}
+	if err := rejectArgs(fs); err != nil {
+		return config.AppConfig{}, "", err
+	}
+	cfg, err := config.LoadAppConfig(appConfig)
+	if err != nil {
+		return config.AppConfig{}, "", err
+	}
+	return cfg, effectiveConfigFile(appConfig), nil
+}
+
+func parseConfig(name string, args []string) (string, *flag.FlagSet, error) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	appConfig := fs.String("config-file", "", "voxtype-tui config.toml path")
+	if err := fs.Parse(args); err != nil {
+		return "", nil, err
+	}
+	return *appConfig, fs, nil
+}
+
+func effectiveConfigFile(path string) string {
+	if path != "" {
+		return path
+	}
+	if path = os.Getenv("VOXTYPE_TUI_CONFIG"); path != "" {
+		return path
+	}
+	return config.DefaultConfigFile()
+}
+
+func rejectArgs(fs *flag.FlagSet) error {
+	if fs.NArg() == 0 {
+		return nil
+	}
+	return fmt.Errorf("unexpected %s argument: %s", fs.Name(), fs.Arg(0))
+}
+
+func isRecordAction(action string) bool {
+	switch action {
+	case "toggle", "start", "stop":
+		return true
+	default:
+		return false
+	}
 }
