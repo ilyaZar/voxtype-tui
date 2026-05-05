@@ -44,7 +44,7 @@ func TestWriteCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "# Languages included in the Ctrl+F12 Voxtype cycle.\nenabled = [\"en\", \"de\"]\n"
+	want := "# Languages included in the Ctrl+Pause/Break Voxtype cycle.\nenabled = [\"en\", \"de\"]\n"
 	if string(data) != want {
 		t.Fatalf("data = %q, want %q", string(data), want)
 	}

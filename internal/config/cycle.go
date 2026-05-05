@@ -40,7 +40,7 @@ func WriteCycle(path string, codes []string) error {
 	for _, code := range codes {
 		quoted = append(quoted, fmt.Sprintf("%q", code))
 	}
-	text := "# Languages included in the Ctrl+F12 Voxtype cycle.\n"
+	text := "# Languages included in the Ctrl+Pause/Break Voxtype cycle.\n"
 	text += fmt.Sprintf("enabled = [%s]\n", strings.Join(quoted, ", "))
 	return atomicWriteFile(path, []byte(text), 0o644)
 }

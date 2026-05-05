@@ -46,7 +46,7 @@ GOBIN="$HOME/.local/bin" go install github.com/ilyaZar/voxtype-tui/cmd/voxtype-t
 - Runtime integration expects `voxtype`, `systemctl --user`, `hyprctl`, and
   Ghostty. `notify-send` is used when available.
 - Hypr window rules own popup size and centering. If the selector is already on
-  the current workspace, Shift+F12 focuses it; stale selectors on other
+  the current workspace, Shift+Pause/Break focuses it; stale selectors on other
   workspaces are closed and relaunched.
 - The default config path is `~/.config/voxtype-tui/config.toml`.
 - The default integration paths match the repo-managed Omarchy overlay:
